@@ -1178,7 +1178,7 @@ input[type=range]{width:min(320px,80vw);accent-color:#d4a74a}
       if (!hero || hero.famille !== 'character') throw new Error('Le pacte demande un héros.');
       if (!monster || monster.famille !== 'monster') throw new Error('Le pacte demande un monstre capturé.');
       const lvl = Math.floor(opts.level || 1);
-      if (lvl < (PACT.min_level || 5)) throw new Error(`Le héros doit être au moins niveau ${PACT.min_level || 5} pour sceller un pacte.`);
+      if (lvl < (PACT.min_level ?? 5)) throw new Error(`Le héros doit être au moins niveau ${PACT.min_level ?? 5} pour sceller un pacte.`);
       const seed = `pacte|${SEED_VERSION}|${hero.entity_id}|${monster.entity_id}`;
       const r = new Rng(seed);
       const sp = SPECIES[monster.espece];
@@ -1205,13 +1205,13 @@ input[type=range]{width:min(320px,80vw);accent-color:#d4a74a}
         coup, coup_label: MOVE[coup].label, atout, atout_label: atout ? TRAIT[atout].label : null,
         affinite2, affinite2_label: affinite2 ? AFF[affinite2].label : null,
         titre, nom_lie: `${hero.nom}, ${titre}`, greffe,
-        repos_rupture_jours: PACT.break_rest_days || 7
+        repos_rupture_jours: PACT.break_rest_days ?? 7
       };
     }
 
     // Rompre le pacte : le monstre revient au bestiaire et se repose.
     function breakPact(p, now) {
-      return { monstre: p.monstre, repos_jusqua: now + (PACT.break_rest_days || 7) * DAY };
+      return { monstre: p.monstre, repos_jusqua: now + (PACT.break_rest_days ?? 7) * DAY };
     }
 
     // Héritier : deux héros de niveau max donnent un nouveau héros. Déterministe
@@ -1219,11 +1219,12 @@ input[type=range]{width:min(320px,80vw);accent-color:#d4a74a}
     function inherit(a, b, opts = {}) {
       if (!a || !b || a.famille !== 'character' || b.famille !== 'character') throw new Error("L'héritier demande deux héros.");
       if (a.entity_id === b.entity_id) throw new Error('Choisis deux héros distincts.');
-      const need = HEIR.min_level || P.max_level;
+      const need = HEIR.min_level ?? P.max_level;
       const [la, lb] = opts.levels || [1, 1];
       if (la < need || lb < need) throw new Error(`Les deux héros doivent être niveau ${need}.`);
       const gen = Math.max(a.generation || 0, b.generation || 0) + 1;
-      if (gen > (HEIR.max_generation || 3)) throw new Error(`Une lignée s'arrête à la ${HEIR.max_generation || 3}e génération.`);
+      const maxGen = HEIR.max_generation ?? 3; // 0 = lignée sans limite (v28, demande de Will)
+      if (maxGen > 0 && gen > maxGen) throw new Error(`Une lignée s'arrête à la ${maxGen}e génération.`);
       const [p, q] = [a, b].sort((x, y) => (x.entity_id < y.entity_id ? -1 : 1));
       const seed = `heritier|${SEED_VERSION}|${p.entity_id}|${q.entity_id}`;
       const rng = new Rng(seed), h = cyrb128(seed);
@@ -2428,12 +2429,28 @@ input[type=range]{width:min(320px,80vw);accent-color:#d4a74a}
     if (SCN.size > 60) SCN.clear(); SCN.set(key, c); return c;
   }
   // Carte : décor 1:1 + figure 48 px posée au sol, sans aucun agrandissement
+  // Détache le dessin de son décor (v28) : fond assombri, contour d'un pixel contrasté, halo derrière les dessins sombres,
+  // et dessins très sombres éclaircis. Rend une copie du sprite, prête à poser.
+  function pop(sp, x, w, h) {
+    const W0 = sp.width, H0 = sp.height, sx = sp.getContext('2d'), d = sx.getImageData(0, 0, W0, H0), px = d.data;
+    let sum = 0, n = 0; for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 128) { sum += (0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]) / 255; n++; }
+    const L = n ? sum / n : 0.5;
+    x.fillStyle = 'rgba(0,0,0,.46)'; x.fillRect(0, 0, w, h); // le décor recule
+    { const a = L < 0.42 ? 0.45 : 0.26, gr = x.createRadialGradient(w / 2, h * 0.55, 2, w / 2, h * 0.55, Math.max(w, h) * 0.5); gr.addColorStop(0, `rgba(255,226,180,${a})`); gr.addColorStop(1, 'rgba(255,226,180,0)'); x.fillStyle = gr; x.fillRect(0, 0, w, h); } // halo derrière le dessin
+    const o = document.createElement('canvas'); o.width = W0; o.height = H0; const ox = o.getContext('2d');
+    if (L < 0.3) { const k = 1 + (0.3 - L) * 2.2; for (let i = 0; i < px.length; i += 4) if (px[i + 3]) { px[i] = Math.min(255, px[i] * k + 10); px[i + 1] = Math.min(255, px[i + 1] * k + 10); px[i + 2] = Math.min(255, px[i + 2] * k + 10); } }
+    const body = document.createElement('canvas'); body.width = W0; body.height = H0; body.getContext('2d').putImageData(d, 0, 0);
+    const rim = document.createElement('canvas'); rim.width = W0; rim.height = H0; const rx = rim.getContext('2d');
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) rx.drawImage(body, dx, dy);
+    rx.globalCompositeOperation = 'source-in'; rx.fillStyle = L < 0.42 ? '#e8d6b0' : '#050308'; rx.fillRect(0, 0, W0, H0);
+    ox.drawImage(rim, 0, 0); ox.drawImage(body, 0, 0); return o;
+  }
   function card(e, w, h, opts = {}) {
     const isFig = e.famille === 'character' || e.famille === 'monster';
     const aff = isFig ? (e.affinite || 'shadow') : 'vault', gy = isFig ? h - Math.max(8, Math.round(h * 0.12)) : h - 8;
     const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
     x.drawImage(scene(aff, w, h, e.entity_id || e.code_source || 'x', gy), 0, 0);
-    const sp = opts.sprite || render(document.createElement('canvas'), e, { layer: 'sprite', mirror: opts.mirror });
+    const sp = pop(opts.sprite || render(document.createElement('canvas'), e, { layer: 'sprite', mirror: opts.mirror }), x, w, h);
     if (isFig && h >= N + 6) { x.fillStyle = 'rgba(0,0,0,.5)'; x.fillRect((w >> 1) - 12, gy - 1, 24, 2); }
     if (!isFig) x.drawImage(sp, (w - N) >> 1, (h - N) >> 1);
     else if (h >= N + 6) x.drawImage(sp, (w - N) >> 1, gy - N + 1);
@@ -6133,9 +6150,9 @@ const DATA = {
     "boss_threat": 5
   },
   "pact": {
-    "note": "Pacte héros + monstre capturé (validé par Will le 7/11/2026).",
-    "min_level": 5,
-    "break_rest_days": 7,
+    "note": "Pacte héros + monstre capturé (validé par Will le 7/11/2026). v28 : sans limite (niveau 1, pas de repos à la rupture), demande de Will le 7/11/2026.",
+    "min_level": 1,
+    "break_rest_days": 0,
     "profile_traits": {
       "brute": "tenacious",
       "swift": "echo",
@@ -6152,9 +6169,9 @@ const DATA = {
     ]
   },
   "heir": {
-    "note": "Héritier héros + héros (validé par Will le 7/11/2026). Les parents sont absorbés, leurs codes restent rescannables au niveau 1.",
-    "min_level": 10,
-    "max_generation": 3,
+    "note": "Héritier héros + héros (validé par Will le 7/11/2026). Les parents sont absorbés, leurs codes restent rescannables au niveau 1. v28 : sans limite (niveau 1, lignée illimitée ; 0 = illimité), demande de Will le 7/11/2026.",
+    "min_level": 1,
+    "max_generation": 0,
     "stat_bonus": 0.05
   },
   "atlas": {
@@ -8423,7 +8440,7 @@ function blood(x, y, dir, n) { // coulure dans un coin
   for (let i = 0; i < n; i++) { const len = 1 + Math.floor(hsh(x + i, y) * 5); R(x + dir * i, y, 1, len, i % 3 ? '#7a0c10' : C.blood); if (len > 3) R(x + dir * i, y + len, 1, 1, '#5a0608'); }
 }
 function box(x, y, w, h, col = C.gold, fill = C.panel) { // bloc de pierre taillée : rebord biseauté et fissuré, fond creusé
-  if (w >= 120 && h >= 60 && UIM.c_tl?.width) { R(x + 4, y + 4, w - 8, h - 8, C.edge); g.drawImage(stoneTex(w - 12, h - 12, fill), x + 6, y + 6); R(x + 6, y + 6, w - 12, 2, 'rgba(0,0,0,.5)'); kitFrame(x, y, w, h); if (col === C.goldHi) { R(x + 9, y + 9, w - 18, 1, '#8a6428'); R(x + 9, y + h - 10, w - 18, 1, '#8a6428'); } return; }
+  if (w >= 84 && h >= 66 && UIM.c_tl?.width) { R(x + 4, y + 4, w - 8, h - 8, C.edge); g.drawImage(stoneTex(w - 12, h - 12, fill), x + 6, y + 6); R(x + 6, y + 6, w - 12, 2, 'rgba(0,0,0,.5)'); kitFrame(x, y, w, h); if (col === C.goldHi) { R(x + 9, y + 9, w - 18, 1, '#8a6428'); R(x + 9, y + h - 10, w - 18, 1, '#8a6428'); } return; }
   const hi = col === C.goldHi, sec = col === C.line, rim = w > 40 && h > 26 ? 4 : 2;
   if (x + w < W && y + h < H) R(x + 2, y + h, w - 2, 1, 'rgba(0,0,0,.55)'), R(x + w, y + 2, 1, h - 2, 'rgba(0,0,0,.55)');
   R(x + 1, y, w - 2, h, C.edge); R(x, y + 1, w, h - 2, C.edge);
@@ -8624,16 +8641,28 @@ const BOOT = {
     }
     for (const e of this.em) { e.y -= e.v; e.x += Math.sin(t / 700 + e.d) * .2; if (e.y < 0) { e.y = H; e.x = Math.random() * W; } R(e.x | 0, e.y | 0, 1, 1, e.v > .6 ? '#ffb347' : '#d8572f'); }
     const lg = img(LOGO), dy = Math.round(Math.sin(t / 900) * 1.5);
-    if (lg.complete && lg.width) g.drawImage(lg, (W - lg.width) >> 1, 40 + dy); else T('Lost Battalions', W / 2, 80, C.goldHi, 't', 'c');
-    T('Chaque code-barres cache un soldat oublié', W / 2, 176, C.bone, 'm', 'c');
+    // logo agrandi (v28) : 300×100 → 435×145
+    if (lg.complete && lg.width) { const lw = Math.round(lg.width * 1.45), lh = Math.round(lg.height * 1.45); g.save(); g.imageSmoothingEnabled = false; g.drawImage(lg, (W - lw) >> 1, 18 + dy, lw, lh); g.restore(); } else T('Lost Battalions', W / 2, 80, C.goldHi, 't', 'c');
+    T('Que révèlent tes codes-barres ?', W / 2, 178, C.bone, 'm', 'c');
+    if (!this.heard()) { if (Math.floor(t / 700) % 2) T('Touche l\'écran pour le son', W / 2, 222, C.dim, 's', 'c'); }
     if ((t - this.t0) > 800 && Math.floor(t / 500) % 2) { const hw = tw('Appuie sur START') / 2; skull(W / 2 - hw - 14, 271, C.red); T('Appuie sur START', W / 2, 266, C.goldHi, 'm', 'c'); skull(W / 2 + hw + 7, 271, C.red); }
     hit(0, 0, W, H, () => this.go());
   },
   /* START (ou A) entre toujours directement dans le jeu. Le son démarre tout seul quand le navigateur l'autorise ; sinon le premier toucher de l'écran le libère sans quitter le titre */
+  /* v28 : la musique et le tonnerre partent seuls dès que le navigateur l'autorise. Sinon (iPhone, Safari, page dans Claude), le tout premier
+     geste, quel qu'il soit, START compris, libère le son SANS quitter le titre : un coup de tonnerre éclate et la musique démarre ; le geste suivant entre. */
+  heard() { return save?.opts?.sound === false || (MUSIC.on && (!AC || AC.state === 'running')); },
   input(b) { if (b === 'a') this.go(true); }, onStart() { this.go(true); },
-  go(force) { if (!force && (!MUSIC.on || (AC && AC.state !== 'running')) && save?.opts?.sound !== false) return; if (performance.now() - this.t0 < 300) return; MUSIC.stop(); home(); }
+  go(force) { if (!this.heard() || performance.now() - (this.unlock || 0) < 250) return; this.go2(force); },
+  go2(force) { if (!force && (!MUSIC.on || (AC && AC.state !== 'running')) && save?.opts?.sound !== false) return; if (performance.now() - this.t0 < 300) return; MUSIC.stop(); home(); }
 };
-['pointerdown', 'keydown'].forEach((ev) => addEventListener(ev, () => { if (scene !== BOOT || save?.opts?.sound === false) return; if (!MUSIC.on) { MUSIC.start(); BOOT.unlock = performance.now(); } else if (AC && AC.state !== 'running') { AC.resume(); BOOT.unlock = performance.now(); } }, { capture: true }));
+['pointerdown', 'touchstart', 'touchend', 'pointerup', 'click', 'keydown', 'mousedown'].forEach((ev) => addEventListener(ev, () => { if (scene !== BOOT || save?.opts?.sound === false || BOOT.heard()) return;
+  BOOT.unlock = performance.now(); try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {} // iPhone : le son passe même bouton silencieux activé (Safari 16.4+)
+  if (!MUSIC.on) MUSIC.start(); if (AC && AC.state !== 'running') AC.resume();
+  setTimeout(() => { if (scene === BOOT) { BOOT.storm = 0; } }, 60); // un éclair et son tonnerre tout de suite
+}, { capture: true, passive: true }));
+// essai sans geste dès le chargement (ordinateur, page déjà visitée) : relance quelques fois tant que le navigateur refuse
+[400, 1500, 3000].forEach((ms) => setTimeout(() => { if (scene === BOOT && save?.opts?.sound !== false && !BOOT.heard()) { try { if (!MUSIC.on) MUSIC.start(); else AC?.resume(); } catch {} } }, ms));
 
 /* ---------- Camp (menu principal) ---------- */
 /* ---------- Temple de pierre du Camp ---------- */
@@ -8684,6 +8713,12 @@ function medallion(x, y, hero) { // médaillon de fer : crâne du héros, œil d
   if (hero) skull(x + 8, y + 7, C.bone); else eye(x + 8, y + 8);
   for (const [i, j] of [[10, 0], [10, 20], [0, 10], [20, 10]]) R(x + i, y + j, 2, 2, '#c89848');
 }
+function kitEdge(x, y, w, h) { // petit cadre (cases, cartes) : bords à joints de la planche de pierre, sans coins sculptés
+  const EH = UIM.e_h, EV = UIM.e_v; if (!EH?.width) return false;
+  for (let yy = y; yy < y + h; yy += EV.height) { const sh = Math.min(EV.height, y + h - yy); g.drawImage(EV, 0, 0, EV.width, sh, x - 4, yy, EV.width, sh); g.drawImage(EV, 0, 0, EV.width, sh, x + w - EV.width + 4, yy, EV.width, sh); }
+  for (let xx = x - 4; xx < x + w + 4; xx += EH.width) { const sw = Math.min(EH.width, x + w + 4 - xx); g.drawImage(EH, 0, 0, sw, EH.height, xx, y - 5, sw, EH.height); g.drawImage(EH, 0, 0, sw, EH.height, xx, y + h - EH.height + 5, sw, EH.height); }
+  return true;
+}
 function kitFrame(x, y, w, h) { // cadre en pierre taillée de la planche de Will : coins sculptés, bords à joints
   const TL = UIM.c_tl, TR = UIM.c_tr, BL = UIM.c_bl, EH = UIM.e_h, EV = UIM.e_v; if (!TL?.width) return false;
   for (let xx = x + 20; xx < x + w - 20; xx += EH.width) { const sw = Math.min(EH.width, x + w - 20 - xx); g.drawImage(EH, 0, 0, sw, EH.height, xx, y, sw, EH.height); g.drawImage(EH, 0, 0, sw, EH.height, xx, y + h - EH.height, sw, EH.height); }
@@ -8711,9 +8746,11 @@ const HOME = {
       { label: 'Expédition', ic: 'ic_quest', badge: save.run ? '!' : 0, fn: () => go(ATLAS) },
       { label: 'Scanner', ic: 'ic_scan', fn: () => go(SCAN) },
       { label: 'Collection', ic: 'ic_coll', fn: () => go(COLL) },
+      { label: 'Duels', ic: 'ic_duel', fn: () => go(PVP) },
       { label: 'Forge', ic: 'ic_forge', fn: () => go(FORGE) },
       { label: 'Bestiaire', ic: 'ic_beast', fn: () => go(BESTIARY) },
-      { label: 'Grimoire', ic: 'ic_log', badge: questsOpen(), fn: () => go(QUESTS) }
+      { label: 'Grimoire', ic: 'ic_log', badge: questsOpen(), fn: () => go(QUESTS) },
+      { label: 'Réglages', ic: 'ic_opts', fn: () => go(OPTS) }
     ];
   },
   lead() { const hs = owned('character'); if (!hs.length) return null; if (!hs.includes(save.lead)) save.lead = hs[0]; return save.lead; },
@@ -8734,19 +8771,20 @@ const HOME = {
       T(e.archetype_label + ' · niv. ' + xp.level, HX, 232, C.bone, 's', 'c', 216);
       ironBar(22, 278, 184, xp.max ? 1 : xp.into, xp.max ? 1 : Math.max(1, xp.need), '#b88a2c');
     } else { T('Aucun héros', HX, 140, C.bone, 'm', 'c'); T('Scanne un code-barres', HX, 170, C.dim, 's', 'c'); }
-    // menu massif à droite (demande de Will) : bloc de pierre plein, 6 grandes cases, icônes 88 px ; nom de la case en haut à gauche
+    // menu massif à droite (demande de Will) : bloc de pierre plein, 8 grandes cases (v28), icônes de sa planche ; nom de la case en haut à gauche
     const MX = 234, CX = (MX + W) >> 1;
     R(MX - 3, 0, W - MX + 3, 300, C.edge); g.drawImage(stoneTex(W - MX, 300, 'I'), MX, 0); R(MX, 0, 1, 300, '#8e847a'); R(MX + 1, 0, 2, 300, 'rgba(0,0,0,.45)');
     T(its[this.i].label, 8, 4, C.goldHi, 't', 'l', 220);
-    const TW = 114, TH = 96, GAPX = 6, GAPY = 5, GX = CX - TW - (GAPX >> 1), GY0 = 3;
+    const rows = Math.ceil(its.length / 2), GAPX = 12, GAPY = 11, TW = 108, TH = Math.floor((300 - 12 - (rows - 1) * GAPY) / rows), GX = CX - TW - (GAPX >> 1), GY0 = 7;
     its.forEach((it, i) => {
       const x = GX + (i % 2) * (TW + GAPX), y = GY0 + (i >> 1) * (TH + GAPY), on = i === this.i, ic = UIM[it.ic];
       R(x - 2, y - 2, TW + 4, TH + 4, C.edge); R(x - 1, y - 1, TW + 2, 1, '#6e665e'); g.drawImage(stoneTex(TW, TH, 'I'), x, y);
       R(x, y, TW, 3, 'rgba(0,0,0,.6)'); R(x, y, 3, TH, 'rgba(0,0,0,.45)'); R(x, y + TH - 1, TW, 1, '#6e665e'); R(x + TW - 1, y, 1, TH, '#5a5258');
       if (on) { const p = Math.floor(t / 300) % 2; g.fillStyle = 'rgba(170,24,28,.30)'; g.fillRect(x, y, TW, TH);
         for (const [cx, cy, dx, dy] of [[x - 2, y - 2, 1, 1], [x + TW + 1, y - 2, -1, 1], [x - 2, y + TH + 1, 1, -1], [x + TW + 1, y + TH + 1, -1, -1]]) { R(Math.min(cx, cx + dx * (11 + p)), cy - (dy < 0 ? 1 : 0), 12 + p, 2, '#ff5030'); R(cx - (dx < 0 ? 1 : 0), Math.min(cy, cy + dy * (11 + p)), 2, 12 + p, '#ff5030'); } }
-      if (ic?.width) g.drawImage(ic, x + ((TW - ic.width) >> 1), y + ((TH - ic.height) >> 1) - (on ? 1 : 0));
-      if (it.badge) { const bx = x + TW - 24, by = y + 3; R(bx, by, 20, 21, C.edge); R(bx + 1, by + 1, 18, 19, '#b52a24'); T(String(it.badge), bx + 10, by - 1, '#fff7ea', 's', 'c'); }
+      kitEdge(x, y, TW, TH);
+      if (ic?.width) { const k = Math.min(1, (TH - 8) / ic.height, (TW - 10) / ic.width), iw = Math.round(ic.width * k), ih = Math.round(ic.height * k); g.drawImage(ic, x + ((TW - iw) >> 1), y + ((TH - ih) >> 1) - (on ? 1 : 0), iw, ih); }
+      if (it.badge) { const bx = x + TW - 24, by = y + 6; R(bx, by, 20, 21, C.edge); R(bx + 1, by + 1, 18, 19, '#b52a24'); T(String(it.badge), bx + 10, by - 1, '#fff7ea', 's', 'c'); }
       hit(x, y, TW, TH, () => { if (this.i === i) it.fn(); else { this.i = i; sfx('move'); } });
     });
     slab(300, 20);
@@ -9238,8 +9276,8 @@ const FORGE = {
     return [
       { label: 'Fusionner deux objets', help: 'Deux armes ou deux accessoires disparaissent et en donnent un plus fort. Même rareté : un cran au-dessus.', fn: () => this.fuse() },
       { label: 'Graver une rune', help: 'Choisis une rune libre, puis sa cible : héros, arme ou accessoire selon la rune. Une rune ne sert qu\'une fois.', fn: () => this.engrave() },
-      { label: 'Sceller un pacte', help: 'Un héros niveau 5 ou plus se lie à un monstre capturé : il gagne son coup, un atout et sa seconde affinité.', fn: () => this.pact() },
-      { label: 'Donner un héritier', help: 'Deux héros niveau 10 s\'unissent en un héritier plus fort, qui repart au niveau 1. Les parents disparaissent.', fn: () => this.heir() }
+      { label: 'Sceller un pacte', help: 'N\'importe quel héros se lie à un monstre capturé : il gagne son coup, un atout et sa seconde affinité. Un nouveau pacte remplace l\'ancien.', fn: () => this.pact() },
+      { label: 'Donner un héritier', help: 'Deux héros, de n\'importe quel niveau, s\'unissent en un héritier plus fort, sans limite de générations. Les parents disparaissent.', fn: () => this.heir() }
     ];
   },
   draw(t) {
@@ -9252,10 +9290,11 @@ const FORGE = {
   fuse() { const items = save.codes.filter((k) => ['weapon', 'accessory'].includes(base(k).famille)); go(LIST, { title: 'Premier objet', items: itemsOf(items), empty: 'Il faut des armes ou des accessoires.', onPick: (a) => fuseFrom(a.key) }); },
   engrave() { const runes = save.codes.filter((k) => base(k).famille === 'upgrade' && !runeUsed(k)); go(LIST, { title: 'Choisir la rune', items: itemsOf(runes), empty: 'Aucune rune libre. Scanne des codes pour en trouver.', onPick: (r) => engraveFrom(r.key) }); },
   pact() {
-    const min = DATA.pact?.min_level || 5, hs = owned('character').filter((k) => !save.pacts[k] && E.levelForXp(save.xp[k] || 0) >= min);
-    go(LIST, { title: 'Quel héros se lie ?', items: itemsOf(hs), empty: `Il faut un héros niveau ${min} ou plus, sans pacte. Gagne des combats pour monter.`, onPick: (h) => {
-      const now = Date.now(), ms = Object.keys(save.bestiary).filter((m) => save.bestiary[m] && !(save.mrest[m] > now));
-      go(LIST, { title: 'Quel monstre ?', items: ms.map((m) => ({ key: m, label: base(m).nom, sub: base(m).espece_label + ' · Menace ' + base(m).menace })), empty: 'Aucun monstre capturé et reposé. Bats un monstre plusieurs fois pour le capturer.', onPick: (m) => {
+    const min = DATA.pact?.min_level ?? 5, hs = owned('character').filter((k) => E.levelForXp(save.xp[k] || 0) >= min); // v28 : sans limite, un nouveau pacte remplace l'ancien
+    go(LIST, { title: 'Quel héros se lie ?', items: itemsOf(hs), empty: min > 1 ? `Il faut un héros niveau ${min} ou plus.` : 'Il faut un héros. Scanne des codes-barres pour en trouver.', onPick: (h) => {
+      const ms = Object.keys(save.bestiary).filter((m) => save.bestiary[m]);
+      go(LIST, { title: 'Quel monstre ?', items: ms.map((m) => ({ key: m, label: base(m).nom, sub: base(m).espece_label + ' · Menace ' + base(m).menace })), empty: 'Aucun monstre capturé. Bats un monstre pour tenter de le capturer.', onPick: (m) => {
+        const old = save.pacts[h.key]; if (old) save.bestiary[old.m] = true;
         let pc; try { pc = E.pact(withRunes(h.key), base(m.key), { level: E.levelForXp(save.xp[h.key] || 0) }); } catch (er) { LIST.empty = er.message; return; }
         save.pacts[h.key] = { p: pc, m: m.key }; delete save.bestiary[m.key]; questEvent('forge'); persist(); spr.clear();
         stack = [HOME]; scene = null; go(SHEET, { key: h.key }); SHEET.float('Pacte scellé', C.red); SHEET.play((d) => AN.upgrade(a48, withRunes(h.key), '#e03028', d)); sfx('reveal', 'legendary');
@@ -9263,9 +9302,9 @@ const FORGE = {
     } });
   },
   heir() {
-    const max = DATA.heir?.min_level || DATA.progression.max_level || 10, hs = owned('character').filter((k) => E.levelForXp(save.xp[k] || 0) >= max);
-    go(LIST, { title: 'Premier parent', items: itemsOf(hs), empty: `Il faut deux héros niveau ${max}.`, onPick: (a) => {
-      go(LIST, { title: 'Second parent', items: itemsOf(hs.filter((k) => k !== a.key)), empty: `Il faut un second héros niveau ${max}.`, onPick: (b) => {
+    const max = DATA.heir?.min_level ?? DATA.progression.max_level ?? 10, hs = owned('character').filter((k) => E.levelForXp(save.xp[k] || 0) >= max), need = max > 1 ? ` niveau ${max}` : '';
+    go(LIST, { title: 'Premier parent', items: itemsOf(hs), empty: `Il faut deux héros${need}.`, onPick: (a) => {
+      go(LIST, { title: 'Second parent', items: itemsOf(hs.filter((k) => k !== a.key)), empty: `Il faut un second héros${need}.`, onPick: (b) => {
         go(CONFIRM, { a: a.key, b: b.key, title: 'Héritier', warn: 'Les deux parents disparaîtront.', okLabel: 'Donner un héritier', ok: () => doHeir(a.key, b.key) });
       } });
     } });
@@ -9389,9 +9428,51 @@ const DUELSET = {
 const stageCv = document.createElement('canvas');
 const clean = (s) => String(s || '').replace(/\s*\([^)]*\)/g, '');
 const ACTS = [['attack', 'Attaque', 'Frappe selon l\'ATQ. Peut être esquivée.'], ['spell', 'Sort', 'Selon la MAG, coûte 2 énergie. Jamais esquivé.'], ['guard', 'Garde', 'Dégâts divisés par deux, +1 énergie.'], ['skill', 'Compétence', '']];
+/* ---------- Duels entre joueurs (v28) : chacun son héros, choix des actions en secret, à tour de rôle sur la même console ----------
+   Joueur 1 prend un héros de sa collection. Joueur 2 tape le code-barres de son héros (ou en prend un dans la collection).
+   Sur la console, le même écran servira aux duels entre deux consoles (ESP-NOW). */
+const PVP = {
+  a: null, b: null, i: 0, hd: true,
+  enter() { const hs = owned('character'); if (!hs.includes(this.a)) this.a = hs[0] || null; this.i = 0; },
+  draw(t) {
+    header('Duels');
+    if (!this.a) { T('Il faut au moins un héros.', W / 2, 150, C.dim, 'm', 'c'); return; }
+    [['Joueur 1', this.a], ['Joueur 2', this.b]].forEach(([l, k], j) => {
+      const x = 8 + j * 248, on = this.i === j; box(x, 50, 216, 192, on ? C.goldHi : C.line, on ? C.sel : C.panel);
+      T(l, x + 108, 58, on ? C.goldHi : j ? C.blue : C.gold, 'm', 'c');
+      if (k) { const e = base(k); frame(x + 52, 92, 104, RCOL[e.rarete]); g.drawImage(PX.card(e, 104, 104), x + 52, 92); T(k.startsWith('E:') ? e.nom : dn(k), x + 108, 204, C.bone, 's', 'c', 196); }
+      else { T('?', x + 108, 112, C.faint, 't', 'c'); T('Tape le code-barres', x + 108, 168, C.bone, 's', 'c'); T('de ton héros', x + 108, 194, C.dim, 's', 'c'); }
+      hit(x, 50, 216, 192, () => { if (this.i === j) this.pick(j); else this.i = j; });
+    });
+    T('contre', W / 2, 132, C.red, 's', 'c');
+    const on = this.i === 2, ok = !!this.b; box(130, 252, 220, 56, on ? C.goldHi : C.line, on ? C.sel : C.panel); T('Combattre !', W / 2, 264, ok ? (on ? C.goldHi : C.bone) : C.faint, 'm', 'c'); hit(130, 252, 220, 56, () => this.start());
+  },
+  pick(j) {
+    if (j === 0) return go(LIST, { title: 'Joueur 1', items: itemsOf(owned('character')), onPick: (it) => { this.a = it.key; back(); } });
+    go(LIST, { title: 'Joueur 2', items: [{ key: null, typed: true, label: 'Taper un code-barres', sub: 'Les 13 chiffres sous les barres (ou 12). Le même code donne toujours le même héros.' }, ...itemsOf(owned('character').filter((k) => k !== this.a))], onPick: (it) => {
+      if (!it.typed) { this.b = it.key; back(); return; }
+      scene = stack.pop(); go(KB, { title: 'Code du joueur 2', kind: 'digits', value: '', max: 13, onOk: (v) => {
+        if (v.length < 12) return 'Au moins 12 chiffres.';
+        const code = scanCode(v); if (!code) return 'Code illisible.';
+        const e = E.generate(code); if (e.famille !== 'character') return `Ce code cache « ${e.nom} », pas un héros.`;
+        const k = 'E:' + e.entity_id; tmp.set(k, e); this.b = k; back();
+      } });
+    } });
+  },
+  input(b) {
+    if (b === 'b') return back(); if (!this.a) return;
+    if (b === 'left') this.i = 0; else if (b === 'right') this.i = 1; else if (b === 'down') this.i = 2; else if (b === 'up' && this.i === 2) this.i = 0;
+    else if (b === 'a') { if (this.i === 2) this.start(); else this.pick(this.i); }
+  },
+  start() {
+    if (!this.b) { this.i = 1; return; }
+    const lvA = E.levelForXp(save.xp[this.a] || 0), loB = this.b.startsWith('E:') ? { character: base(this.b), level: lvA } : loadoutOf(this.b);
+    go(BATTLE, { a: this.a, b: this.b, loB, pvp: true });
+  }
+};
 const BATTLE = {
   enter(p) {
-    this.monster = false; this.exp = false; this.amb = null; Object.assign(this, p); this.cam = 0; this.sel = 0; this.floats = []; this.banner = null; this.over = false; this.lines = [];
+    this.monster = false; this.exp = false; this.pvp = false; this.side = 'A'; this.pend = null; this.amb = null; Object.assign(this, p); this.cam = 0; this.sel = 0; this.floats = []; this.banner = null; this.over = false; this.lines = [];
     this.seed = `${p.a}|${p.b}|${Date.now()}`;
     const run = p.exp ? save.run : null; // expédition : PV restants, faveurs, décor de la région, combat rejouable à l'identique
     if (run) { const rg = AT.region(run.region), mo = base(p.b); this.amb = rg.ambiance; this.bgx = decorCv(rg.decor, 204); save.seen[mo.espece] = save.seen[mo.espece] || { t: Date.now(), v: 0 }; }
@@ -9436,8 +9517,9 @@ const BATTLE = {
       return;
     }
     if (busy || this.msg) { wrap(this.msg || '...', 444).slice(0, 3).forEach((l, j) => T(l, 18, 218 + j * 30, C.bone)); if (!busy) { if (Math.floor(t / 400) % 2) arrow(454, 296, 0); hit(0, 0, W, H, () => { this.msg = ''; }); } return; }
-    const la = this.battle.legalActions('A'), sk = E.labels.skill(s.A.skill), acts = this.acts(), Y0 = acts.length > 4 ? 214 : 249;
-    if (acts.length <= 4) { T(`Que doit faire ${dn(this.a)} ?`, 18, 213, C.bone, 'm', 'l', 444); R(14, 243, 452, 1, '#3a3438'); R(14, 244, 452, 1, 'rgba(255,240,220,.06)'); }
+    const SD = this.side, me = s[SD], la = this.battle.legalActions(SD), sk = E.labels.skill(me.skill), acts = this.acts(), Y0 = acts.length > 4 ? 214 : 249;
+    const who = SD === 'A' ? dn(this.a) : this.nameB;
+    if (acts.length <= 4) { T(this.pvp ? `Joueur ${SD === 'A' ? 1 : 2} : que fait ${who} ?` : `Que doit faire ${who} ?`, 18, 213, this.pvp && SD === 'B' ? C.blue : C.bone, 'm', 'l', 444); R(14, 243, 452, 1, '#3a3438'); R(14, 244, 452, 1, 'rgba(255,240,220,.06)'); }
     acts.forEach(([id, l], k) => {
       const x = 12 + (k % 2) * 140, y = Y0 + Math.floor(k / 2) * 32, on = k === this.sel, ok = id === 'spell' ? la.spell : id === 'skill' ? la.skill : true;
       if (on) { selBar(x, y, 136, 30); arrow(x + 5, y + 9, t); }
@@ -9446,13 +9528,19 @@ const BATTLE = {
     });
     R(292, Y0, 1, acts.length > 4 ? 94 : 62, '#3a3438');
     const [id, , d] = acts[Math.min(this.sel, acts.length - 1)];
-    const desc = id === 'skill' ? `${sk.label} : ${sk.text}` + (s.A.skillLeft <= 0 ? ' (déjà utilisée)' : '') : id === 'spell' && !la.spell ? 'Pas assez d\'énergie.' : d;
+    const desc = id === 'skill' ? `${sk.label} : ${sk.text}` + (me.skillLeft <= 0 ? ' (déjà utilisée)' : '') : id === 'spell' && !la.spell ? 'Pas assez d\'énergie.' : d;
     const dl = wrap(desc, 170, 's'); if (dl.length > 3) { dl.length = 3; dl[2] = dl[2].replace(/\s*\S*$/, '') + '...'; } dl.forEach((ln, j) => T(ln, 300, Y0 - 1 + j * 22, C.dim, 's'));
   },
-  acts() { const la = this.battle.legalActions('A'); return la.pact ? [...ACTS, ['pact', 'Pacte', la.pact.label + ' : le coup du monstre lié, une fois par combat.']] : ACTS; },
-  act(id) { const la = this.battle.legalActions('A'); if ((id === 'spell' && !la.spell) || (id === 'skill' && !la.skill)) { this.msg = id === 'spell' ? 'Pas assez d\'énergie pour un sort.' : 'Compétence déjà utilisée.'; return; } this.turn(id); },
-  async turn(action) {
-    busy = true; this.battle.playTurn(action);
+  acts() { const la = this.battle.legalActions(this.side); return la.pact ? [...ACTS, ['pact', 'Pacte', la.pact.label + ' : le coup du monstre lié, une fois par combat.']] : ACTS; },
+  act(id) {
+    const la = this.battle.legalActions(this.side); if ((id === 'spell' && !la.spell) || (id === 'skill' && !la.skill)) { this.msg = id === 'spell' ? 'Pas assez d\'énergie pour un sort.' : 'Compétence déjà utilisée.'; return; }
+    // Duel entre joueurs (v28) : le joueur 1 choisit en secret, puis le joueur 2, et le tour se joue
+    if (this.pvp && this.side === 'A') { this.pend = id; this.side = 'B'; this.sel = 0; this.msg = 'Joueur 1 a choisi en secret. Passe la console au joueur 2.'; sfx('ok'); return; }
+    if (this.pvp) { const a = this.pend; this.pend = null; this.side = 'A'; this.sel = 0; this.turn(a, id); return; }
+    this.turn(id);
+  },
+  async turn(action, actionB) {
+    busy = true; this.battle.playTurn(action, actionB);
     const evs = this.battle.state.log.slice(this.seen), names = { skill: (id) => E.labels.skill(id)?.label || (DATA.monsters?.moves?.find?.((m) => m.id === id)?.label) || '' };
     for (const ev of evs) { await this.stage.event(ev, names); await new Promise((r) => setTimeout(r, AN.isOn?.() === false ? 0 : 380)); this.seen++; }
     this.hp = { A: this.battle.state.A.hp, B: this.battle.state.B.hp };
@@ -9461,7 +9549,7 @@ const BATTLE = {
   },
   finish() {
     const s = this.battle.state; if (this.over) return; this.over = true; this.hp = { A: s.A.hp, B: s.B.hp };
-    this.banner = { txt: s.winner === 'A' ? 'Victoire' : s.winner === 'B' ? 'Défaite' : 'Match nul', t: performance.now() };
+    this.banner = { txt: this.pvp ? (s.winner ? `Joueur ${s.winner === 'A' ? 1 : 2} gagne` : 'Match nul') : s.winner === 'A' ? 'Victoire' : s.winner === 'B' ? 'Défaite' : 'Match nul', t: performance.now() };
     this.lines = [];
     if (this.exp && save.run) {
       const run = save.run, mo = base(this.b), won = s.winner === 'A', now = Date.now();
