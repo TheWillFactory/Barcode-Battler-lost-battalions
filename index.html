@@ -2778,7 +2778,7 @@ input[type=range]{width:min(320px,80vw);accent-color:#d4a74a}
 </script>
 <script>
 const DATA = {
-  "data_version": "LB-DATA-0.4.1",
+  "data_version": "LB-DATA-0.5.0",
   "seed_version": "LB-SEED-1",
   "status": "PROPOSITION : valeurs de jeu provisoires, à ajuster par playtest",
   "world": {
@@ -2790,17 +2790,17 @@ const DATA = {
     {
       "id": "character",
       "label": "Personnage",
-      "weight": 40
+      "weight": 28
     },
     {
       "id": "weapon",
       "label": "Arme",
-      "weight": 25
+      "weight": 30
     },
     {
       "id": "accessory",
       "label": "Accessoire",
-      "weight": 20
+      "weight": 27
     },
     {
       "id": "upgrade",
@@ -8196,7 +8196,26 @@ const DATA = {
         ]
       }
     ]
-  }
+  },
+  "families_v1": [
+    {
+      "id": "character",
+      "weight": 40
+    },
+    {
+      "id": "weapon",
+      "weight": 25
+    },
+    {
+      "id": "accessory",
+      "weight": 20
+    },
+    {
+      "id": "upgrade",
+      "weight": 15
+    }
+  ],
+  "families_note": "v29 (7/11/2026, demande de Will : trop de héros) : héros 28, armes 30, accessoires 27, runes 15. families_v1 = anciennes valeurs, utilisées par la bêta pour figer les collections déjà scannées."
 };
 const E = LBEngine.createEngine(DATA), PX = LBPixel, AN = LBAnim;
 let W = 480, H = 320; const SW0 = 480, SH0 = 320, LW = 320, LH = 240, LX = 80, LY = 40; // écran 3,5" 480×320 ; les écrans pas encore refaits sont dessinés en 320×240 au centre
@@ -8516,9 +8535,17 @@ save.seed = E.data.seed_version;
 const SAMPLE = ['5000602453919', '4004159492552', '5009270134533', '8002581378419', '5400327498965', '3765993826972', '3005433513445', '5004036766591', '5407959935653', '5001563547488'];
 if (!save.codes.length) save.codes = SAMPLE.slice();
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch {} };
+/* v29 : nouvelle répartition des familles (moins de héros, plus d'armes et d'accessoires). Les codes déjà dans la collection
+   sont figés avec l'ancienne répartition : rien ne change pour ce qu'on possède déjà. Les nouveaux scans suivent la nouvelle. */
+if ((save.genv || 1) < 2) {
+  save.frozen = save.frozen || {};
+  try { const E1 = LBEngine.createEngine({ ...DATA, families: DATA.families.map((f) => ({ ...f, weight: (DATA.families_v1 || []).find((o) => o.id === f.id)?.weight ?? f.weight })), data_version: 'LB-DATA-0.4.1' });
+    for (const k of save.codes) if (/^\d{12,13}$/.test(k) && !save.frozen[k]) save.frozen[k] = E1.generate(k); } catch {}
+  save.genv = 2;
+}
 persist(); AN.setEnabled(save.opts.anim !== false);
 const cache = new Map(), spr = new Map(), tmp = new Map();
-function base(k) { if (tmp.has(k)) return tmp.get(k); if (String(k).startsWith('L:') && save.loot?.[k]) return save.loot[k]; if (save.made?.[k]) return save.made[k]; // fusion ou héritier : l'entité exacte est gardée (les runes des parents disparaissent avec eux)
+function base(k) { if (tmp.has(k)) return tmp.get(k); if (save.frozen?.[k]) return save.frozen[k]; if (String(k).startsWith('L:') && save.loot?.[k]) return save.loot[k]; if (save.made?.[k]) return save.made[k]; // fusion ou héritier : l'entité exacte est gardée (les runes des parents disparaissent avec eux)
    if (!cache.has(k)) { let e; if (String(k).startsWith('F:')) { const [a, b] = save.fusions[k]; e = E.fuse(withRunes(a), withRunes(b)); } else e = E.generate(k); cache.set(k, e); } return cache.get(k); }
 function withRunes(k) { let e = base(k); for (const rc of save.runes[k] || []) { try { e = E.applyUpgrade(e, base(rc)); } catch {} } return e; }
 const dn = (k) => save.names[k] || withRunes(k).nom;
